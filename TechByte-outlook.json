@@ -1,0 +1,1024 @@
+{
+  "name": "TechByte-outlook",
+  "nodes": [
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\n// Add engagement score to each item\nconst scored = items.map(item => {\n  const views = Number(item.json.viewCount) || 1;\n  const likes = Number(item.json.likeCount) || 0;\n  const comments = Number(item.json.commentCount) || 0;\n\n  const engagementScore = (likes + comments) / views;\n\n  return {\n    json: {\n      ...item.json,\n      views,\n      likes,\n      comments,\n      engagementScore\n    }\n  };\n});\n\n// Sort by views (highest = trending)\nscored.sort((a, b) => b.json.views - a.json.views);\n\n// Return TOP 10 videos (not just 1) to have backup options\nreturn scored.slice(0, 10);"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3088,
+        400
+      ],
+      "id": "34322338-4065-4ecd-a3c4-4f2cf4aafa4e",
+      "name": "Calculate Engagement & Select Top 10"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 1) Pinecone responses (current node input)\nconst pineconeItems = $input.all();\n\n// 2) Original video list from \"Prepare Pinecone Payload\"\nconst originalItems = $items('Prepare Pinecone Payload', 0).map(i => i.json);\n\nconst newVideos = [];\n\nfor (let i = 0; i < pineconeItems.length; i++) {\n  const pine = pineconeItems[i].json;          // { vectors, namespace, usage }\n  const video = originalItems[i].video;        // { videoId, title, stats, ... }\n\n  const vectors = pine.vectors || {};\n\n  // If Pinecone does NOT have this videoId, keep it\n  if (!vectors[video.videoId]) {\n    newVideos.push({ json: video });\n  }\n}\n\n// If we filtered out all videos, stop workflow for today\nif (newVideos.length === 0) {\n  throw new Error('All top videos have already been sent. Skipping today.');\n}\n\nreturn newVideos;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2704,
+        448
+      ],
+      "id": "243fc00d-2b35-4464-90e1-ec78fdfbe8be",
+      "name": "Filter Out Sent Videos"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Take only the FIRST unsent video\nconst items = $input.all();\nreturn [items[0]];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2528,
+        368
+      ],
+      "id": "ffef3e9b-b4e5-4ec0-9013-62e67269445f",
+      "name": "Select First Unsent Video"
+    },
+    {
+      "parameters": {
+        "url": "=https://youtube-transcriptor.p.rapidapi.com/transcript",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "video_id",
+              "value": "={{ $json.videoId }}"
+            },
+            {
+              "name": "lang",
+              "value": "en"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-rapidapi-host",
+              "value": "youtube-transcriptor.p.rapidapi.com"
+            },
+            {
+              "name": "x-rapidapi-key",
+              "value": "Your Key Here"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -2144,
+        448
+      ],
+      "id": "e4964bdf-c400-411b-b46a-cf84d69b6b3b",
+      "name": "Fetch Transcript"
+    },
+    {
+      "parameters": {
+        "jsCode": "const video = $('Current Video').first().json;\nconst transcriptResponse = $input.first().json;\n\nlet transcript = transcriptResponse.transcriptionAsText;\n\nif (!transcript && transcriptResponse.transcription) {\n  transcript = transcriptResponse.transcription\n    .map(seg => seg.subtitle || seg.text || '')\n    .join(' ');\n}\n\nif (!transcript) {\n  transcript = `No transcript available. Using video description:\\n\\n${video.description}`;\n}\n\n// Safety limit\ntranscript = transcript.substring(0, 8000);\n\nreturn [{\n  json: {\n    ...video,\n    transcript,\n    hasTranscript: !!transcriptResponse.transcriptionAsText\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1968,
+        336
+      ],
+      "id": "4a32edd0-0c39-40a7-a6a2-d674105c735f",
+      "name": "Process Transcript"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are an expert at creating clean, concise, human-like summaries of YouTube videos for email updates about trending AI/tech content.Video Details:\n\nTitle: {{ $json.title }}\nChannel: {{ $json.channelTitle }}\nVideo URL: https://www.youtube.com/watch?v={{ $json.videoId }}\nContent: {{ $json.transcript }}\nYOUR TASK:\nCreate a natural, conversational summary that explains the content clearly with sufficient detail.STYLE RULES:\n\nWrite like you're explaining to a friend—skip phrases like \"In this video,\" \"X recently shared,\" or the creator's name\nGet straight to the insight or technique being taught\nProvide 4-6 bullet points with meaningful detail and context\nEach bullet should be 2-3 sentences explaining the concept properly\nTotal length: 200-250 words (not too short, not too long—substantial but concise)\nFriendly tone but informative\nUse Unicode bold characters (𝐁𝐨𝐥𝐝) to emphasize 2-4 important keywords or phrases per bullet point\nApply bold sparingly—only to the most critical terms (company names, key concepts, technologies)\nFORMATTING EXAMPLES:\n✅ Correct: \"Anthropic acquired 𝐁𝐮𝐧 to bolster its 𝐀𝐈 𝐢𝐧𝐟𝐫𝐚𝐬𝐭𝐫𝐮𝐜𝐭𝐮𝐫𝐞 for tools like Claude Code\"\n❌ Wrong: \"Anthropic acquired Bun\"Unicode Bold Characters:\n𝐀𝐁𝐂𝐃𝐄𝐅𝐆𝐇𝐈𝐉𝐊𝐋𝐌𝐍𝐎𝐏𝐐𝐑𝐒𝐓𝐔𝐕𝐖𝐗𝐘𝐙\n𝐚𝐛𝐜𝐝𝐞𝐟𝐠𝐡𝐢𝐣𝐤𝐥𝐦𝐧𝐨𝐩𝐪𝐫𝐬𝐭𝐮𝐯𝐰𝐱𝐲𝐳\n𝟎𝟏𝟐𝟑𝟒𝟓𝟔𝟕𝟖𝟗OUTPUT FORMAT:\nReturn ONLY valid JSON (no markdown code blocks, no backticks):{\n\"title\": \"A short, engaging title with 𝐔𝐧𝐢𝐜𝐨𝐝𝐞 𝐁𝐨𝐥𝐝 for key terms\",\n\"summary\": \"👋 [Brief 2-sentence intro with context].\\n\\n💡 Key Takeaways:\\n- First point with proper explanation (2-3 sentences with 𝐛𝐨𝐥𝐝 terms)\\n- Second point with context and details (2-3 sentences with 𝐛𝐨𝐥𝐝 terms)\\n- Third point explaining implications (2-3 sentences)\\n- Fourth point with additional insights\\n- [Optional 5th-6th points if content is rich]\\n\\n🔗 Learn more: [Video URL]\"\n}IMPORTANT:\n\nOutput raw JSON only. No ```json wrapper\nUse Unicode bold characters (𝐁𝐨𝐥𝐝), NOT markdown (bold)\nTarget 250-300 words total—provide enough detail to be informative\nEach bullet should explain the concept properly, not just list it\nBold only 2-4 key terms per bullet point",
+        "hasOutputParser": true,
+        "batching": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.7,
+      "position": [
+        -1824,
+        448
+      ],
+      "id": "a5df71dc-ecaa-4dcd-8f92-8b5bce82d123",
+      "name": "Generate Summary"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.data.Feedback }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "string",
+                      "operation": "notEmpty",
+                      "singleValue": true
+                    },
+                    "id": "6ba2b172-0a6a-475b-8158-c11184bff2f8"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "User Responded"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.data.Feedback }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "string",
+                      "operation": "empty",
+                      "singleValue": true
+                    },
+                    "id": "8264c933-98e2-4925-a80f-71e0e1c5fd55"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Timeout - No Response"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.3,
+      "position": [
+        -1120,
+        448
+      ],
+      "id": "5fa77fd4-ea72-40dc-a3f8-6670df903764",
+      "name": "Check if User Responded"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.data.Feedback }}",
+                    "rightValue": "Approve",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "f5617c79-7512-4f16-af6f-475a8720353b"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Approved"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.data.Feedback }}",
+                    "rightValue": "Reject - Revise Content",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "55b1f7b6-c0c9-4fe2-9537-19b01f9fe128"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Revise Same Video"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.data.Feedback }}",
+                    "rightValue": "Reject - Try Next Video",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "925b220f-cfb7-4a9f-86ac-c539a6d3dc0e"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Try Next Video"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.3,
+      "position": [
+        -912,
+        224
+      ],
+      "id": "6ab4b369-3716-43a5-ab91-e1a605192c19",
+      "name": "Approval Decision"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Stop execution - no email for today\nthrow new Error('No response within 2 hours. Workflow stopped for today.');"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -928,
+        576
+      ],
+      "id": "3c5b9d48-90e0-4182-a3ef-09a4e8e42505",
+      "name": "Stop Workflow (No Response)"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are an expert at revising YouTube video summaries based on user feedback.\n\nREJECTION FEEDBACK:\n{{ $json.data[\"Reason for rejection\"] }}\n\nORIGINAL SUMMARY:\nTitle: {{ $('Parse LLM Response1').item.json.data.title }}\nSummary: {{ $('Parse LLM Response1').item.json.data.summary }}\n\nVIDEO DETAILS:\nTitle: {{ $('Process Transcript').item.json.title }}\nChannel: {{ $('Process Transcript').item.json.channelTitle }}\nVideo URL: https://www.youtube.com/watch?v={{ $('Process Transcript').item.json.videoId }}\n\nYOUR TASK:\nAnalyze the rejection feedback carefully. The user may be requesting:\n- Content changes (different focus, more/less detail, different insights)\n- Style changes (tone, formality, writing style)\n- Format changes (structure, layout, presentation style)\n- Length changes (shorter, longer, more concise)\n- Any other modifications they specify\n\nIf the feedback includes specific formatting or style requests (like \"write it like...\", \"make it sound like...\", \"format as...\", \"explain like...\"), follow those instructions EXACTLY.\n\nIf no specific format is mentioned, maintain the original structure but address the content feedback.\n\nFLEXIBLE OUTPUT RULES:\n1. Always return valid JSON with \"title\" and \"summary\" fields\n2. Adapt your writing style to match any requested format\n3. If a specific structure is requested (paragraphs, bullets, threads, etc.), use that structure\n4. If emojis are requested or seem appropriate, use them; if formal tone is requested, omit them\n5. Adjust word count based on feedback (concise = 150-200, standard = 200-250, detailed = 300-350)\n6. Use Unicode bold (𝐁𝐨𝐥𝐝) for emphasis unless a different emphasis style is requested\n7. The summary field should contain the complete formatted text as a string\n8. IMPORTANT: Use actual line breaks (\\n) in the JSON string for formatting, not just spaces\n9. For bullet points, use \"- \" (hyphen with space) at the start of each line\n\nTITLE GUIDELINES:\n- Keep titles clear, concise, and professional\n- Apply Unicode bold to 1-3 key terms only\n- DO NOT mention the style/format in the title (e.g., don't add \"A Grandmother's Explanation\", \"ChatGPT Style\", etc.)\n- Title should describe the content, not the presentation style\n- Maximum 10-12 words\n\nSUMMARY GUIDELINES:\n- Apply the requested style/tone/format to the summary content\n- This is where you adapt the writing style based on feedback\n- Follow the user's specific instructions for how to present the information\n\nUNICODE BOLD CHARACTERS (use when appropriate):\n𝐀𝐁𝐂𝐃𝐄𝐅𝐆𝐇𝐈𝐉𝐊𝐋𝐌𝐍𝐎𝐏𝐐𝐑𝐒𝐓𝐔𝐕𝐖𝐗𝐘𝐙\n𝐚𝐛𝐜𝐝𝐞𝐟𝐠𝐡𝐢𝐣𝐤𝐥𝐦𝐧𝐨𝐩𝐪𝐫𝐬𝐭𝐮𝐯𝐰𝐱𝐲𝐳\n𝟎𝟏𝟐𝟑𝟒𝟓𝟔𝟕𝟖𝟗\n\nDEFAULT FORMAT (use only if no other format is specified):\n- Friendly intro (1-2 sentences)\n- \"💡 Key Takeaways:\" followed by 4-6 bullet points\n- Each bullet: 2-3 sentences with meaningful detail\n- Closing with video link\n- 200-250 words total\n\nFORMATTING EXAMPLES:\n\nExample with bullet points:\n{\n  \"title\": \"React.js Hit with 𝐂𝐫𝐢𝐭𝐢𝐜𝐚𝐥 Vulnerability\",\n  \"summary\": \"👋 Intro text here.\\n\\n💡 Key Takeaways:\\n- First bullet point with details.\\n- Second bullet point with more info.\\n- Third bullet point.\\n\\n🔗 Learn more: [URL]\"\n}\n\nExample with paragraphs (if grandmother style requested):\n{\n  \"title\": \"Understanding 𝐑𝐞𝐚𝐜𝐭.𝐣𝐬 Security Issues\",\n  \"summary\": \"Hello dear, let me explain this in a way that's easy to understand...\\n\\nYou see, it's like when you leave your front door unlocked...\\n\\n🔗 Learn more: [URL]\"\n}\n\nOUTPUT FORMAT:\nReturn ONLY valid JSON (no markdown code blocks, no backticks):\n\n{\n  \"title\": \"Engaging title that matches the requested style\",\n  \"summary\": \"Complete summary following user's format preferences or default structure\"\n}\n\nIMPORTANT:\n- Interpret the feedback naturally and intelligently\n- Be flexible and adaptive to any reasonable request\n- Maintain professionalism and quality regardless of format\n- Use \\n for line breaks in the JSON string\n- Use \"- \" (not \"* \") for bullet points\n- Keep title professional - apply style ONLY to summary\n- Output raw JSON only",
+        "hasOutputParser": true,
+        "batching": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.7,
+      "position": [
+        -464,
+        256
+      ],
+      "id": "cbc9c2fe-91fd-4204-aef5-116b48ea3619",
+      "name": "Revise Summary"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 0 11 * * 1-5"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -4160,
+        448
+      ],
+      "id": "11f78d7c-9552-44f1-874b-7ed30e2665e5",
+      "name": "Schedule Trigger1"
+    },
+    {
+      "parameters": {
+        "jsCode": "const allInfluencers = [\n  \n  { name: \"Cole Medin\", channelId: \"UCMwVTLZIRRUyyVrkjDpn4pA\" },\n  { name: \"AI Uncovered\", channelId: \"UCUTF61UNExRdjmoK5mXwWfQ\" },\n  { name: \"Matt Wolfe\", channelId: \"UCbXxLQfYpM8JY6wTZWOrN0A\" },\n  { name: \"ByteByteGo\", channelId: \"UCZgt6AzoyjslHTC9dz0UoTw\" },\n  { name: \"nicksaraev\", channelId: \"UCbo-KbSjJDG6JWQ_MTZ_rNA\" },\n  { name: \"Fireship\", channelId: \"UCsBjURrPoezykLs9EqgamOA\" },\n  { name: \"airevolutionx\", channelId: \"UC5l7RouTQ60oUjLjt1Nh-UQ\" },\n  { name: \"TheAiGrid\", channelId: \"UCbY9xX3_jW5c2fjlZVBI4cg\" }\n];\n\nfunction shuffle(array) {\n  for (let i = array.length - 1; i > 0; i--) {\n    const j = Math.floor(Math.random() * (i + 1));\n    [array[i], array[j]] = [array[j], array[i]];\n  }\n  return array;\n}\n\nconst shuffled = shuffle([...allInfluencers]);\nconst selected = shuffled.slice(0, 5);\n\nreturn selected.map(influencer => ({\n  json: influencer\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3984,
+        448
+      ],
+      "id": "6d185fa1-5ad9-437d-9f7b-965a55ea765d",
+      "name": "Select Top 5 Influencers1"
+    },
+    {
+      "parameters": {
+        "url": "=https://www.googleapis.com/youtube/v3/search",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "youTubeOAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "part",
+              "value": "snippet"
+            },
+            {
+              "name": "channelId",
+              "value": "={{ $json.channelId }}"
+            },
+            {
+              "name": "maxResults",
+              "value": "20"
+            },
+            {
+              "name": "order",
+              "value": "date"
+            },
+            {
+              "name": "type",
+              "value": "video"
+            },
+            {
+              "name": "publishedAfter",
+              "value": "={{ $now.minus({ days: 7 }).toISO() }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -3792,
+        448
+      ],
+      "id": "5645ff5d-17d4-42e5-a46c-ac7e76c1f744",
+      "name": "Fetch Videos via YouTube API1",
+      "credentials": {
+        "youTubeOAuth2Api": {
+          "id": "TMdGLJROksm5tpTy",
+          "name": "2109-2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst videos = [];\n\nfor (const item of items) {\n  for (const video of item.json.items) {\n    videos.push({\n      json: {\n        videoId: video.id.videoId,\n        meta: {\n          title: video.snippet.title,\n          description: video.snippet.description,\n          channelTitle: video.snippet.channelTitle,\n          publishedAt: video.snippet.publishedAt\n        }\n      }\n    });\n  }\n}\n\nreturn videos;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3616,
+        448
+      ],
+      "id": "951866c3-4301-457e-8330-04e69cafdb5f",
+      "name": "Extract Video IDs1"
+    },
+    {
+      "parameters": {
+        "url": "=https://www.googleapis.com/youtube/v3/videos",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "youTubeOAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "part",
+              "value": "statistics,contentDetails"
+            },
+            {
+              "name": "id",
+              "value": "={{ $json.videoId }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -3440,
+        464
+      ],
+      "id": "cfb90366-35df-4a8f-b704-7f220a6bd309",
+      "name": "Fetch Video Statistics1",
+      "credentials": {
+        "youTubeOAuth2Api": {
+          "id": "TMdGLJROksm5tpTy",
+          "name": "2109-2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const statsItems = $input.all();\nconst metaItems = $items(\"Extract Video IDs1\", 0).map(i => i.json);\n\nreturn statsItems.map((statsItem, index) => {\n  const stats = statsItem.json.items?.[0] || {};\n  const meta = metaItems[index]?.meta || {};\n\n  return {\n    json: {\n      videoId: metaItems[index].videoId || \"\",\n      title: meta.title || \"\",\n      description: meta.description || \"\",\n      channelTitle: meta.channelTitle || \"\",\n      publishedAt: meta.publishedAt || \"\",\n      id: stats.id,\n      duration: stats.contentDetails?.duration || \"\",\n      viewCount: parseInt(stats.statistics?.viewCount || 0),\n      likeCount: parseInt(stats.statistics?.likeCount || 0),\n      commentCount: parseInt(stats.statistics?.commentCount || 0)\n    }\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3264,
+        448
+      ],
+      "id": "30b0a9d8-8a57-470e-b46a-f4d2562f5b91",
+      "name": "Merge Stats with Video1"
+    },
+    {
+      "parameters": {
+        "jsCode": "let raw = $input.first().json.text || '';\nraw = raw.replace(/```json|```/g, '').trim();\n\nlet data;\ntry {\n  data = JSON.parse(raw);\n  if (data.summary) {\n    // Remove markdown **bold**\n    data.summary = data.summary.replace(/\\*\\*(.*?)\\*\\*/g, '$1');\n    \n    // Convert * bullets to - bullets for consistency\n    data.summary = data.summary.replace(/^\\* /gm, '- ');\n    \n    // Handle escaped newlines (\\n) and convert to actual newlines\n    data.summary = data.summary.replace(/\\\\n/g, '\\n');\n    data.summary = data.summary.replace(/\\n/g, '<br>');\n    // Clean up any extra spaces\n    data.summary = data.summary.trim();\n  }\n} catch (e) {\n  const jsonMatch = raw.match(/\\{[\\s\\S]*\\}/);\n  if (jsonMatch) {\n    try {\n      data = JSON.parse(jsonMatch[0]);\n      if (data.summary) {\n        // Same cleanup operations\n        data.summary = data.summary.replace(/\\*\\*(.*?)\\*\\*/g, '$1');\n        data.summary = data.summary.replace(/^\\* /gm, '- ');\n        data.summary = data.summary.replace(/\\\\n/g, '\\n');\n        data.summary = data.summary.trim();\n      }\n    } catch (e2) {\n      data = { \n        title: \"Error parsing response\", \n        summary: \"Could not parse the LLM response. Please try again.\"\n      };\n    }\n  } else {\n    data = { \n      title: \"Error: No valid JSON\", \n      summary: \"LLM did not return valid JSON.\"\n    };\n  }\n}\n\nconst video = $('Process Transcript').first().json;\n\n// Get remaining unsent videos (all except the first one we used)\nconst remainingVideos = $('Filter Out Sent Videos').all().slice(1).map(i => i.json);\n\nreturn [{\n  json: {\n    data,\n    metadata: {\n      channelTitle: video.channelTitle,\n      videoUrl: `https://www.youtube.com/watch?v=${video.videoId}`,\n      videoId: video.videoId,\n      viewCount: video.viewCount,\n      likeCount: video.likeCount,\n      commentCount: video.commentCount,\n      hasTranscript: video.hasTranscript,\n      source: 'YouTube',\n      date: new Date().toLocaleDateString('en-GB'),\n      remainingVideosCount: remainingVideos.length\n    },\n    remainingVideos\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1488,
+        464
+      ],
+      "id": "c4a55b71-efd1-4b77-83e4-233871f4b259",
+      "name": "Parse LLM Response1"
+    },
+    {
+      "parameters": {
+        "url": "https://youtube-sent-videos-ise5nus.svc.aped-4627-b74a.pinecone.io/vectors/fetch",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "ids",
+              "value": "={{ $json.video.videoId }}"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Api-Key",
+              "value": "Your Key Here"
+            },
+            {
+              "name": "X-Pinecone-API-Version",
+              "value": "2024-07"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -2816,
+        624
+      ],
+      "id": "9bf3443b-f877-4f11-9da9-31edcff1be82",
+      "name": "Check vedioid presence"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get metadata from Parse LLM Response1\nconst meta = $('Parse LLM Response1').first().json.metadata;\n\n// Pinecone index dimension\nconst DIMENSION = 1024;\n\n// Create a dummy vector: all zeros except the first value\nconst values = Array(DIMENSION).fill(0);\n// Pinecone requires at least one non-zero value\nvalues[0] = 1.0;\n\nreturn [\n  {\n    json: {\n      vectors: [\n        {\n          id: meta.videoId,\n          values,\n          metadata: {\n            channelTitle: meta.channelTitle,\n            date: meta.date,\n            source: 'newsletter'\n          }\n        }\n      ]\n    }\n  }\n];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -688,
+        112
+      ],
+      "id": "5390dbc9-16c3-4a72-ae29-e8bb94536896",
+      "name": "Build Pinecone Upsert Body"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://youtube-sent-videos-ise5nus.svc.aped-4627-b74a.pinecone.io/vectors/upsert",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Api-Key",
+              "value": "Your Key Here"
+            },
+            {
+              "name": "X-Pinecone-API-Version",
+              "value": "2024-07"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -480,
+        48
+      ],
+      "id": "0cc07689-3517-42f6-acde-cf6e84a5865a",
+      "name": "Upsert Video ID in Pinecone (HTTP)"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Just pass through whatever comes in.\n// This node is our “source of truth” for the current video.\nreturn $input.all();\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2336,
+        448
+      ],
+      "id": "5f4b4f3f-1b6c-42a1-83eb-15bb8305f9c5",
+      "name": "Current Video"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Use the remainingVideos list from Parse LLM Response1\nconst parsed = $('Parse LLM Response1').first().json;\nconst remaining = parsed.remainingVideos || [];\n\nif (!remaining.length) {\n  throw new Error('No more videos left to try today.');\n}\n\n// Take the first remaining video\nconst nextVideo = remaining[0];\n\n// (Optional) You could also keep remaining.slice(1) if you want more retries later\nreturn [\n  {\n    json: nextVideo\n  }\n];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -672,
+        624
+      ],
+      "id": "8ce63b05-6725-44dc-91b5-929d81a8f9d5",
+      "name": "Select Next Video from Remaining"
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map(item => ({\n  json: {\n    video: item.json,       // <- Keep your FULL original video data here\n    id: item.json.videoId   // <- Pinecone fetch will need this\n  }\n}));\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2912,
+        448
+      ],
+      "id": "b7581cd4-f258-42f1-9ccf-caba45ba019e",
+      "name": "Prepare Pinecone Payload"
+    },
+    {
+      "parameters": {
+        "model": "llama-3.3-70b-versatile",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [
+        -1840,
+        640
+      ],
+      "id": "015d3077-b2f5-431c-ad05-847d788e4088",
+      "name": "Groq Chat Model",
+      "credentials": {
+        "groqApi": {
+          "id": "hafdFIHPiLswMnjO",
+          "name": "Groq account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "llama-3.3-70b-versatile",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [
+        -464,
+        480
+      ],
+      "id": "cb1c0ca5-a573-471e-9bbd-25e578e4ab20",
+      "name": "Groq Chat Model1",
+      "credentials": {
+        "groqApi": {
+          "id": "hafdFIHPiLswMnjO",
+          "name": "Groq account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "sendAndWait",
+        "toRecipients": "jkrishna@aziro.com",
+        "subject": "={{ $json.metadata.date }} - AI Tech Byte",
+        "message": "=<b>{{ $json.data.title }}</b><br><br>\n\n<div style=\"white-space:pre-line; font-size:15px;\">\n{{ $json.data.summary }}\n</div>",
+        "responseType": "customForm",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Feedback",
+              "fieldType": "dropdown",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "Approve"
+                  },
+                  {
+                    "option": "Reject - Revise Content"
+                  },
+                  {
+                    "option": "Reject - Try Next Video"
+                  }
+                ]
+              },
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Reason for rejection"
+            }
+          ]
+        },
+        "options": {
+          "limitWaitTime": {
+            "values": {
+              "resumeAmount": 2
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [
+        -1296,
+        464
+      ],
+      "id": "8603c4bc-56bc-467d-94fe-f0a401e6daeb",
+      "name": "Send message and wait for response",
+      "webhookId": "af065388-b3a3-421f-b9c2-b3844c5ace77",
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "kuvMCUSJnhqRROaO",
+          "name": "Microsoft Outlook account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "toRecipients": "digitalbu_dms@aziro.com,digitalbuleaders@aziro.com,digitalbu_sales@aziro.com,rohit.y@aziro.com,aiml-executionteam@aziro.com,AIML-NextGen@aziro.com",
+        "subject": "={{ $('Parse LLM Response1').item.json.metadata.date }} - AI Tech Byte",
+        "bodyContent": "=<b>{{ $('Parse LLM Response1').item.json.data.title }}</b><br><br>\n\n<div style=\"white-space:pre-line; font-size:15px;\">\n{{ $('Parse LLM Response1').item.json.data.summary }}\n</div>",
+        "additionalFields": {
+          "from": "AIML Neural Bytes",
+          "bodyContentType": "html"
+        }
+      },
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [
+        -256,
+        48
+      ],
+      "id": "725bb108-9d6b-4da9-873e-543447d4f427",
+      "name": "Send a message",
+      "webhookId": "402df44b-1c46-4029-92b3-a2fd21371c43",
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "kuvMCUSJnhqRROaO",
+          "name": "Microsoft Outlook account 2"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Calculate Engagement & Select Top 10": {
+      "main": [
+        [
+          {
+            "node": "Prepare Pinecone Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Out Sent Videos": {
+      "main": [
+        [
+          {
+            "node": "Select First Unsent Video",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select First Unsent Video": {
+      "main": [
+        [
+          {
+            "node": "Current Video",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Transcript": {
+      "main": [
+        [
+          {
+            "node": "Process Transcript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Transcript": {
+      "main": [
+        [
+          {
+            "node": "Generate Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Summary": {
+      "main": [
+        [
+          {
+            "node": "Parse LLM Response1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check if User Responded": {
+      "main": [
+        [
+          {
+            "node": "Approval Decision",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Stop Workflow (No Response)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Approval Decision": {
+      "main": [
+        [
+          {
+            "node": "Build Pinecone Upsert Body",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Revise Summary",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Select Next Video from Remaining",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Revise Summary": {
+      "main": [
+        [
+          {
+            "node": "Parse LLM Response1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger1": {
+      "main": [
+        [
+          {
+            "node": "Select Top 5 Influencers1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select Top 5 Influencers1": {
+      "main": [
+        [
+          {
+            "node": "Fetch Videos via YouTube API1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Videos via YouTube API1": {
+      "main": [
+        [
+          {
+            "node": "Extract Video IDs1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Video IDs1": {
+      "main": [
+        [
+          {
+            "node": "Fetch Video Statistics1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Video Statistics1": {
+      "main": [
+        [
+          {
+            "node": "Merge Stats with Video1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Stats with Video1": {
+      "main": [
+        [
+          {
+            "node": "Calculate Engagement & Select Top 10",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse LLM Response1": {
+      "main": [
+        [
+          {
+            "node": "Send message and wait for response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check vedioid presence": {
+      "main": [
+        [
+          {
+            "node": "Filter Out Sent Videos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Pinecone Upsert Body": {
+      "main": [
+        [
+          {
+            "node": "Upsert Video ID in Pinecone (HTTP)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert Video ID in Pinecone (HTTP)": {
+      "main": [
+        [
+          {
+            "node": "Send a message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Current Video": {
+      "main": [
+        [
+          {
+            "node": "Fetch Transcript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select Next Video from Remaining": {
+      "main": [
+        [
+          {
+            "node": "Current Video",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Pinecone Payload": {
+      "main": [
+        [
+          {
+            "node": "Check vedioid presence",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Generate Summary",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Revise Summary",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send message and wait for response": {
+      "main": [
+        [
+          {
+            "node": "Check if User Responded",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "513b8d6d-aa1b-4593-a769-8fa7802bdbba",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "e8ad395528bad61d0ad7450be288ffb9fdb9eab8ba231059e76247bd9db3aaae"
+  },
+  "id": "cM0qtQrCj91ytIAc",
+  "tags": []
+}
